@@ -1,16 +1,11 @@
 #include<stdio.h>
-#include<sys/socket.h>
-#include<netinet/in.h>
-#include<netdb.h>
-#include<stdlib.h>
-#include <unistd.h>
-#include <arpa/inet.h>
+#include<stdlib.h> /*for exit(1)*/
+#include <unistd.h> /*for read() and write() functions*/
+#include <arpa/inet.h> /*for all socket-related functions*/
 #include<string.h>
 /*
 
 	UNDER CONSTRUCTION
-
-	
 
 */
 
@@ -71,7 +66,9 @@ void start_server(char serverIPAddress[],int port){
 
 	write(other_file_descriptor,response,sizeof(response));
 	printf("Response is:\n%s",response);
-	printf("Response sent successfully!\n");
+	printf("\nResponse sent successfully!\n");
+	close(server_file_descriptor);
+	close(other_file_descriptor);
 }
 
 int main(int argc,char** argv){
