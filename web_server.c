@@ -1,3 +1,13 @@
+/*
+
+	Author: Nandan Desai
+	Date: 31st May 2018, 12:23 PM (IST)
+	Github repo: https://github.com/NandanDesai/SimpleWebServer
+	
+	About this project: read README.md file
+*/
+
+
 #include <stdio.h>
 #include <stdlib.h> /*for exit(1)*/
 #include <unistd.h> /*for read() and write() functions*/
@@ -6,14 +16,11 @@
 #include <sys/stat.h> /*for stat(), struct stat and mkdir() functions*/
 /*
 
-	A doubt (see line:156)
-
-	To-Do
-	1) implement HTTP HEAD method
-	2) a loop and fork() to support multiple requests and clients
-
+	This program only implements HTTP GET and HEAD methods because that is what a minimal web server is required to implement.
+	
 */
-
+#define MAX_HTTP_RES_SIZE 20000	//~20KB
+#define MAX_HTTP_REQ_SIZE 8000	//~8KB
 
 /*This is a structure that holds the HTTP method and URL mentioned the incoming HTTP request*/
 struct http_request{
@@ -22,6 +29,15 @@ struct http_request{
 	/*We are not interested in other fields yet.*/
 };
 typedef struct http_request http_request;
+
+/*This is a structure that holds the payload content, status message (like "OK" or "Not Found") and status code (like 200 or 404)*/
+struct http_response{
+	char* content;
+	char* status_msg;
+	int status_code;
+};
+typedef struct http_response http_response;
+
 
 /*This function parses the HTTP request and returns the HTTP method and URL mentioned in the request.*/
 http_request* parse_http_request(char* request){
@@ -47,11 +63,11 @@ http_request* parse_http_request(char* request){
 }
 
 /*This function determines the file being requested and the HTTP method mentioned. It returns the content from the file being requested*/
-char* get_response_content(http_request* hreq){
-	char* response;
+http_response* get_response(http_request* hreq){
+	http_response* response=(http_response*)malloc(sizeof(http_response));
 	char buffer[1000];
 	char path[]="./www";
-	if(strcmp(hreq->method,"GET")==0){
+	if(strcmp(hreq->method,"GET")==0 || strcmp(hreq->method,"HEAD")==0){
 		if(strcmp(hreq->url,"/")==0){
 			strcat(path,"/index.html");
 		}else{
@@ -60,22 +76,28 @@ char* get_response_content(http_request* hreq){
 		
 		FILE *fp=fopen(path,"r");
 		if(fp==NULL){
-			response=strdup("<html><h2>404 Not Found</h2></html>");
+			response->content=strdup("<html><h2>404 Not Found</h2></html>");
+			response->status_msg=strdup("Not Found");
+			response->status_code=404;
 			return response;
 		}
-		response=(char*)malloc(20000);
+		response->content=(char*)malloc(MAX_HTTP_RES_SIZE);
 		while(fgets(buffer,sizeof(buffer),fp)){
-			strcat(response,buffer);
+			strcat(response->content,buffer);
 		}
+		response->status_msg=strdup("OK");
+		response->status_code=200;
 	}else{
-		response=strdup("<html><h2>501 Method Not Implemented</h2></html>");
+		response->content=strdup("<html><h2>501 Method Not Implemented</h2></html>");
+		response->status_msg=strdup("Not Implemented");
+		response->status_code=501;
 	}
 	return response;
 }
 
 
 /*This function creates 'www' directory if it does't exists*/
-void create_WWW_directory(){
+void create_www_directory(){
 	struct stat s;
 
 	/*If 'www' directory exists, then struct stat s will be filled with all the metadata related to that directory.
@@ -93,8 +115,8 @@ void create_WWW_directory(){
 
 
 
-void start_server(char serverIPAddress[],int port){
-	create_WWW_directory();
+void start_server(int port){
+	create_www_directory();
 
 	printf("*\tStarting the server\n");
 	/*this is going to hold the file descriptor of server socket */
@@ -105,8 +127,10 @@ void start_server(char serverIPAddress[],int port){
 	client_addr will contain the IP address and port number of clients	*/
 	struct sockaddr_in server_addr,client_addr;
 	
-
-	char buffer[8192];//temporary variable. i will remove this later.
+	/*
+		This variable will contain the HTTP requests sent by the clients
+	*/
+	char buffer[MAX_HTTP_REQ_SIZE]; 
 	
 	/*create the server socket*/	
 	server_file_descriptor=socket(AF_INET,SOCK_STREAM,0);
@@ -117,7 +141,7 @@ void start_server(char serverIPAddress[],int port){
 	
 	/*now let's configure the server address*/
 	server_addr.sin_family=AF_INET;
-	server_addr.sin_addr.s_addr=inet_addr(serverIPAddress);		/*32-bit IP address in Network Byte Order (Big endian order)*/
+	server_addr.sin_addr.s_addr=INADDR_ANY;		/*32-bit IP address in Network Byte Order (Big endian order)*/
 	server_addr.sin_port=htons(port);	/*16-bit port number in Network Byte Order (Big endian order)*/
 	/*htons() stands for "Host to Network Short" which is used to convert Host Byte Order to Network Byte Order*/
 
@@ -135,51 +159,87 @@ void start_server(char serverIPAddress[],int port){
 		exit(1);
 	}
 	printf("*\tServer is ready and waiting for connections...\n");
-	printf("*\tOpen the following link in your browser: http://%s:%d\n",serverIPAddress,port);
-	/*create another file descriptor for interacting with the client which is connected (after accepting connection)*/
-	int clientAddr_len=sizeof(client_addr);
-	other_file_descriptor=accept(server_file_descriptor,(struct sockaddr*) &client_addr,(socklen_t*)&clientAddr_len);
+	printf("*\tTo test the working, open the following link in your browser: http://localhost:%d\n",port);
+	while(1){
+		/*create another file descriptor for interacting with the client which is connected (after accepting connection)*/
+		int clientAddr_len=sizeof(client_addr);
+		other_file_descriptor=accept(server_file_descriptor,(struct sockaddr*) &client_addr,(socklen_t*)&clientAddr_len);
+		/*
+			We want to server many clients, so create a new process for serving the current client.
+		*/
+		int pid=fork();
+		if(pid<0){
+			fprintf(stderr,"*\t[Error] Couldn't execute fork()\n");
+		}else if(pid==0){
+			/*	
+				We are in child process here.
+				server_file_descriptor is of no use in client. So, close it.
+			*/
+			close(server_file_descriptor);
+			
+			/*
+				Read the data sent by the client into 'buffer'.
+			*/
+			read(other_file_descriptor,buffer,sizeof(buffer));
+			printf("\n========================================================================");
+			printf("\n*\tRequest is:");
+			printf("\n%s\n",buffer);	
 	
-	read(other_file_descriptor,buffer,sizeof(buffer));
-	
-
-	printf("\n========================================================================");
-	printf("\n*\tRequest is:");
-	printf("\n%s\n",buffer);	
-	
-
-	/******/	
-	http_request* hr=parse_http_request(buffer);
-	
-	char* content=get_response_content(hr);
-	int len=strlen(content);
-	strcat(content,"\0");
-
-	/*Final HTTP response*/
-	char http_response[20000];
-	/*
-		char* response=(char*)malloc(1000); //this won't work, why?
-	*/
-
-	/*
-		char content[]="<html><head><title>SimpleWebServer</title></head><h2>It works!</h2><p>This program was created by <a href=\"https://github.com/NandanDesai\" target=\"_blank\">Nandan Desai</a>. Feel free to modify the code!</p></html>";
-		int len=strlen(content);
-	
-	
-		char response[1000]; //make response size dynamic
-	*/
-	sprintf(http_response,"HTTP/1.1 200 OK\r\nServer: SimpleWebServer 1.0 (Debian)\r\nContent-Length: %d\r\nConnection: close\r\nContent-Type: text/html; charset=UTF-8\r\n\r\n%s",len,content);
-
-	write(other_file_descriptor,http_response,sizeof(http_response));
-	printf("*\tResponse is:\n%s\n",http_response);
-	printf("========================================================================\n\n");
-	close(server_file_descriptor);
-	close(other_file_descriptor);
+			/*
+				Parse the HTTP request to know the method and the content that is being requested.
+			*/
+			http_request* hreq=parse_http_request(buffer);
+			
+			/*
+				Now, get HTTP response for the given request.
+			*/
+			http_response* hres=get_response(hreq);
+			
+			
+			char* content=hres->content;
+			int content_len=strlen(content);
+			strcat(content,"\0");
+			char* status_msg=hres->status_msg;
+			int status_code=hres->status_code;
+			
+			
+			char http_response[MAX_HTTP_RES_SIZE];
+			/*
+				char* http_response=(char*)malloc(MAX_HTTP_RES_SIZE); //this won't work, why?
+			*/
+			
+			/*
+				If the HTTP request has HEAD method, then reply with the same HTTP headers that you would for a GET request,
+				but just don't send the contents.
+			*/
+			if(strcmp(hreq->method,"HEAD")==0){
+				sprintf(http_response,"HTTP/1.1 %d %s\r\nServer: SimpleWebServer 1.0 (Debian)\r\nContent-Length: %d\r\nConnection: close\r\nContent-Type: text/html; charset=UTF-8",status_code,status_msg,content_len);
+			}else{
+				sprintf(http_response,"HTTP/1.1 %d %s\r\nServer: SimpleWebServer 1.0 (Debian)\r\nContent-Length: %d\r\nConnection: close\r\nContent-Type: text/html; charset=UTF-8\r\n\r\n%s",status_code,status_msg,content_len,content);
+			}
+			write(other_file_descriptor,http_response,sizeof(http_response));
+			printf("*\tResponse is:\n%s\n",http_response);
+			printf("========================================================================\n\n");
+			
+			/*
+				exit from the child process when the webpage is served.
+			*/
+			exit(0);
+		}else{
+			/*
+				We are in parent process now.
+				close the other_file_descriptor created for serving the client previously as the child process is already doing it's job by now.
+				We'll use the other_file_descriptor for the next client.
+			*/
+			close(other_file_descriptor);
+		}
+		
+	}
 }
 
 int main(int argc,char** argv){
 	if(argc==2){
-		start_server("127.0.0.1",atoi(argv[1]));
+		start_server(atoi(argv[1]));
 		return 0;
 	}else{
 		fprintf(stderr,"*\t[Error] expected port number as an argument\n");
