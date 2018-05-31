@@ -7,4 +7,4 @@ The communication between client and server takes place using the Hypertext Tran
 Pages delivered are most frequently HTML documents, which may include images, style sheets and scripts in addition to the text content.
 
 
-(This software is still in development phase)
+SimpleWebServer implements only HTTP GET and HEAD methods.
